@@ -79,6 +79,7 @@ public class ImageStressTest {
     private final AtomicLong frameCount = new AtomicLong();
     private long startTimeMs;
     private String terminalPid = "?";
+    private int sixelRegisters; // queried from the terminal (0 = unknown -> 256)
 
     /**
      * Entry point.
@@ -102,6 +103,26 @@ public class ImageStressTest {
 
         try (var backend = BackendFactory.create()) {
             backend.enableRawMode();
+
+            // Query the terminal's Sixel colour-register count now, while raw mode is on and
+            // before the input loop starts (so the reply isn't read as input). Falls back to 256.
+            sixelRegisters = TerminalImageCapabilities.queryColorRegisters(backend);
+
+            // Manual override for testing how the palette adapts to a smaller register count:
+            //   SIXEL_REGISTERS=64 ./image-stress-test
+            String override = System.getenv("SIXEL_REGISTERS");
+            if (override != null && !override.isEmpty()) {
+                try {
+                    sixelRegisters = Integer.parseInt(override.trim());
+                } catch (NumberFormatException ignored) {
+                    // keep the queried value
+                }
+            }
+
+            if (protocol instanceof SixelProtocol) {
+                protocol = makeSixel();
+            }
+
             backend.enterAlternateScreen();
             backend.hideCursor();
 
@@ -144,10 +165,13 @@ public class ImageStressTest {
                 protocol = new ITermProtocol();
                 break;
             case '3':
-                protocol = new SixelProtocol();
+                protocol = makeSixel();
                 break;
             case 'a':
                 protocol = TerminalImageCapabilities.detect().bestProtocol();
+                if (protocol instanceof SixelProtocol) {
+                    protocol = makeSixel();
+                }
                 break;
             default:
                 break;
@@ -188,7 +212,9 @@ public class ImageStressTest {
                 Span.raw("  Protocol: ").dim(),
                 Span.raw(protocol.name()).yellow().bold(),
                 Span.raw("  Scaling: ").dim(),
-                Span.raw(scaling.name()).magenta().bold()
+                Span.raw(scaling.name()).magenta().bold(),
+                Span.raw("  Sixel regs: ").dim(),
+                Span.raw(sixelRegisters > 0 ? String.valueOf(sixelRegisters) : "? (256)").cyan()
             ),
             Line.from(
                 Span.raw("  Frames: ").dim(),
@@ -284,6 +310,10 @@ public class ImageStressTest {
     }
 
     // ---- helpers ----
+
+    private SixelProtocol makeSixel() {
+        return new SixelProtocol(sixelRegisters > 0 ? Math.min(256, sixelRegisters) : 256);
+    }
 
     private static ImageData generateGradientImage(int w, int h) {
         var img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);

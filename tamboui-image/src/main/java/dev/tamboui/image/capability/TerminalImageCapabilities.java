@@ -4,9 +4,11 @@
  */
 package dev.tamboui.image.capability;
 
+import java.io.IOException;
 import java.util.EnumSet;
 import java.util.Set;
 
+import dev.tamboui.terminal.Backend;
 import dev.tamboui.image.protocol.BrailleProtocol;
 import dev.tamboui.image.protocol.HalfBlockProtocol;
 import dev.tamboui.image.protocol.ITermProtocol;
@@ -46,6 +48,9 @@ public final class TerminalImageCapabilities {
     private final Set<TerminalImageProtocol> supportedProtocols;
     private final TerminalImageProtocol bestSupport;
 
+    /** Number of Sixel colour registers the terminal reported, or 0 if unknown (assume 256). */
+    private int sixelColorRegisters;
+
     private TerminalImageCapabilities(Set<TerminalImageProtocol> supportedProtocols) {
         this.supportedProtocols = EnumSet.copyOf(supportedProtocols);
         this.bestSupport = determineBestSupport(supportedProtocols);
@@ -67,6 +72,94 @@ public final class TerminalImageCapabilities {
             }
         }
         return instance;
+    }
+
+    /**
+     * Detects capabilities from the environment and, when Sixel is supported, additionally queries
+     * the terminal for its number of Sixel colour registers (XTSMGRAPHICS).
+     * <p>
+     * Unlike {@link #detect()} this performs terminal I/O (a query and a short blocking read), so it
+     * must be called on a backend already in raw mode and before the input loop starts consuming
+     * input. The returned instance is fresh (not the cached singleton).
+     *
+     * @param backend the backend to query through
+     * @return capabilities including the queried Sixel colour-register count
+     */
+    public static TerminalImageCapabilities detect(Backend backend) {
+        TerminalImageCapabilities caps = detectFromEnvironment();
+        if (caps.supports(TerminalImageProtocol.SIXEL)) {
+            caps.sixelColorRegisters = queryColorRegisters(backend);
+        }
+        return caps;
+    }
+
+    /**
+     * Returns the number of Sixel colour registers the terminal reported, or {@code 0} if unknown
+     * (in which case the Sixel default of 256 is used).
+     *
+     * @return the colour-register count, or 0 if unknown
+     */
+    public int sixelColorRegisters() {
+        return sixelColorRegisters;
+    }
+
+    /**
+     * Queries the terminal for its number of Sixel colour registers using XTSMGRAPHICS
+     * ({@code CSI ? 1 ; 1 ; 0 S}); the reply is {@code CSI ? 1 ; 0 ; Pn S}.
+     *
+     * @param backend the backend to query through
+     * @return the reported register count, or 0 if the terminal does not answer
+     */
+    public static int queryColorRegisters(Backend backend) {
+        try {
+            backend.writeRaw("\033[?1;1;0S");
+            backend.flush();
+            StringBuilder response = new StringBuilder();
+            int c = backend.read(250); // give the terminal a moment for the first byte
+            int budget = 64;
+            while (c >= 0 && budget-- > 0) {
+                response.append((char) c);
+                if (c == 'S') {
+                    break;
+                }
+                c = backend.read(50);
+            }
+            return parseColorRegisters(response.toString());
+        } catch (IOException e) {
+            return 0;
+        }
+    }
+
+    /**
+     * Parses an XTSMGRAPHICS reply ({@code CSI ? 1 ; 0 ; Pn S}) and returns {@code Pn}, the number
+     * of colour registers, or 0 if the response is missing or malformed.
+     *
+     * @param response the raw terminal response
+     * @return the register count, or 0
+     */
+    static int parseColorRegisters(String response) {
+        if (response == null || !response.contains("\033[?1;")) {
+            return 0;
+        }
+        int end = response.indexOf('S', response.indexOf("\033[?1;"));
+        if (end < 0) {
+            return 0;
+        }
+        int lastSemicolon = response.lastIndexOf(';', end);
+        if (lastSemicolon < 0) {
+            return 0;
+        }
+        try {
+            int value = Integer.parseInt(response.substring(lastSemicolon + 1, end).trim());
+            return value > 0 ? value : 0;
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private SixelProtocol newSixelProtocol() {
+        int colors = sixelColorRegisters > 0 ? Math.min(256, sixelColorRegisters) : 256;
+        return new SixelProtocol(colors);
     }
 
     /**
@@ -148,7 +241,7 @@ public final class TerminalImageCapabilities {
             case ITERM2:
                 return new ITermProtocol();
             case SIXEL:
-                return new SixelProtocol();
+                return newSixelProtocol();
             case HALF_BLOCK:
                 return new HalfBlockProtocol();
             case BRAILLE:
@@ -171,7 +264,7 @@ public final class TerminalImageCapabilities {
             case ITERM2:
                 return new ITermProtocol();
             case SIXEL:
-                return new SixelProtocol();
+                return newSixelProtocol();
             case HALF_BLOCK:
                 return new HalfBlockProtocol();
             case BRAILLE:

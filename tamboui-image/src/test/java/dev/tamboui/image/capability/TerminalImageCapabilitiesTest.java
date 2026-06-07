@@ -27,6 +27,24 @@ class TerminalImageCapabilitiesTest {
     }
 
     @Test
+    void parseColorRegisters_reads_the_xtsmgraphics_reply() {
+        // CSI ? 1 ; 0 ; Pn S  -> Pn
+        assertThat(TerminalImageCapabilities.parseColorRegisters("\033[?1;0;256S")).isEqualTo(256);
+        assertThat(TerminalImageCapabilities.parseColorRegisters("\033[?1;0;1024S")).isEqualTo(1024);
+        assertThat(TerminalImageCapabilities.parseColorRegisters("\033[?1;0;16S")).isEqualTo(16);
+    }
+
+    @Test
+    void parseColorRegisters_returns_zero_on_missing_or_malformed_reply() {
+        assertThat(TerminalImageCapabilities.parseColorRegisters(null)).isZero();
+        assertThat(TerminalImageCapabilities.parseColorRegisters("")).isZero();
+        assertThat(TerminalImageCapabilities.parseColorRegisters("garbage")).isZero();
+        assertThat(TerminalImageCapabilities.parseColorRegisters("\033[?1;0;S")).isZero();
+        // An XTSMGRAPHICS failure reply (Ps != 0) carries no count -> treated as unknown.
+        assertThat(TerminalImageCapabilities.parseColorRegisters("\033[?1;3;0S")).isZero();
+    }
+
+    @Test
     void withSupport_creates_capabilities_with_specified_support() {
         TerminalImageCapabilities caps = TerminalImageCapabilities.withSupport(
             EnumSet.of(TerminalImageProtocol.KITTY, TerminalImageProtocol.HALF_BLOCK)
