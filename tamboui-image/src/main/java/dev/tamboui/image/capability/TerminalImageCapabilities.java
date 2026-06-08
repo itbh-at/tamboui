@@ -51,6 +51,10 @@ public final class TerminalImageCapabilities {
     /** Number of Sixel colour registers the terminal reported, or 0 if unknown (assume 256). */
     private int sixelColorRegisters;
 
+    /** Terminal cell pixel size (width, height) from CSI 16 t, or 0 if unknown. */
+    private int cellPixelWidth;
+    private int cellPixelHeight;
+
     private TerminalImageCapabilities(Set<TerminalImageProtocol> supportedProtocols) {
         this.supportedProtocols = EnumSet.copyOf(supportedProtocols);
         this.bestSupport = determineBestSupport(supportedProtocols);
@@ -89,6 +93,11 @@ public final class TerminalImageCapabilities {
         TerminalImageCapabilities caps = detectFromEnvironment();
         if (caps.supports(TerminalImageProtocol.SIXEL)) {
             caps.sixelColorRegisters = queryColorRegisters(backend);
+            int[] cell = queryCellPixelSize(backend);
+            if (cell != null) {
+                caps.cellPixelWidth = cell[0];
+                caps.cellPixelHeight = cell[1];
+            }
         }
         return caps;
     }
@@ -112,19 +121,7 @@ public final class TerminalImageCapabilities {
      */
     public static int queryColorRegisters(Backend backend) {
         try {
-            backend.writeRaw("\033[?1;1;0S");
-            backend.flush();
-            StringBuilder response = new StringBuilder();
-            int c = backend.read(250); // give the terminal a moment for the first byte
-            int budget = 64;
-            while (c >= 0 && budget-- > 0) {
-                response.append((char) c);
-                if (c == 'S') {
-                    break;
-                }
-                c = backend.read(50);
-            }
-            return parseColorRegisters(response.toString());
+            return parseColorRegisters(queryResponse(backend, "\033[?1;1;0S", 'S'));
         } catch (IOException e) {
             return 0;
         }
@@ -157,9 +154,109 @@ public final class TerminalImageCapabilities {
         }
     }
 
+    /**
+     * Returns the terminal cell pixel size {@code [width, height]} reported via {@code CSI 16 t},
+     * or {@code [0, 0]} if unknown.
+     *
+     * @return the cell pixel size, width then height (0 if unknown)
+     */
+    public int[] cellPixelSize() {
+        return new int[] {cellPixelWidth, cellPixelHeight};
+    }
+
+    /**
+     * Queries the terminal for its character cell size in pixels ({@code CSI 16 t}); the reply is
+     * {@code CSI 6 ; height ; width t}.
+     *
+     * @param backend the backend to query through
+     * @return the cell size as {@code [width, height]}, or {@code null} if the terminal does not answer
+     */
+    public static int[] queryCellPixelSize(Backend backend) {
+        try {
+            // Preferred: CSI 16 t reports the cell size directly.
+            int[] cell = parseCellPixelSize(queryResponse(backend, "\033[16t", 't'));
+            if (cell != null) {
+                return cell;
+            }
+            // Fallback (e.g. iTerm2): derive it from the window pixel size (CSI 14 t) and the text
+            // area in characters (CSI 18 t). cell = windowPixels / characters.
+            int[] windowPixels = parseCsiPair(queryResponse(backend, "\033[14t", 't'), "\033[4;");
+            int[] textChars = parseCsiPair(queryResponse(backend, "\033[18t", 't'), "\033[8;");
+            if (windowPixels != null && textChars != null && textChars[1] > 0 && textChars[0] > 0) {
+                // CSI 4 reports height;width, CSI 8 reports rows;cols.
+                int width = windowPixels[1] / textChars[1];
+                int height = windowPixels[0] / textChars[0];
+                if (width > 0 && height > 0) {
+                    return new int[] {width, height};
+                }
+            }
+            return null;
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private static String queryResponse(Backend backend, String request, char terminator) throws IOException {
+        backend.writeRaw(request);
+        backend.flush();
+        StringBuilder response = new StringBuilder();
+        int c = backend.read(250);
+        int budget = 64;
+        while (c >= 0 && budget-- > 0) {
+            response.append((char) c);
+            if (c == terminator) {
+                break;
+            }
+            c = backend.read(50);
+        }
+        return response.toString();
+    }
+
+    /** Parses the first two semicolon-separated numbers after {@code prefix} up to a {@code t}. */
+    private static int[] parseCsiPair(String response, String prefix) {
+        if (response == null) {
+            return null;
+        }
+        int start = response.indexOf(prefix);
+        if (start < 0) {
+            return null;
+        }
+        int end = response.indexOf('t', start);
+        if (end < 0) {
+            return null;
+        }
+        String[] parts = response.substring(start + prefix.length(), end).split(";");
+        if (parts.length < 2) {
+            return null;
+        }
+        try {
+            int a = Integer.parseInt(parts[0].trim());
+            int b = Integer.parseInt(parts[1].trim());
+            if (a > 0 && b > 0) {
+                return new int[] {a, b};
+            }
+        } catch (NumberFormatException e) {
+            // fall through
+        }
+        return null;
+    }
+
+    /**
+     * Parses a {@code CSI 6 ; height ; width t} reply and returns {@code [width, height]}, or
+     * {@code null} if the response is missing or malformed.
+     *
+     * @param response the raw terminal response
+     * @return the cell size {@code [width, height]}, or {@code null}
+     */
+    static int[] parseCellPixelSize(String response) {
+        // CSI 6 ; height ; width t  ->  [width, height]
+        int[] pair = parseCsiPair(response, "\033[6;");
+        return pair == null ? null : new int[] {pair[1], pair[0]};
+    }
+
     private SixelProtocol newSixelProtocol() {
         int colors = sixelColorRegisters > 0 ? Math.min(256, sixelColorRegisters) : 256;
-        return new SixelProtocol(colors);
+        return new SixelProtocol(colors, cellPixelWidth, cellPixelHeight);
     }
 
     /**

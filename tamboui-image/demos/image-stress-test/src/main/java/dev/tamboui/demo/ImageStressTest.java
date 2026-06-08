@@ -80,6 +80,8 @@ public class ImageStressTest {
     private long startTimeMs;
     private String terminalPid = "?";
     private int sixelRegisters; // queried from the terminal (0 = unknown -> 256)
+    private int cellW; // terminal cell pixel width (0 = unknown -> 8)
+    private int cellH; // terminal cell pixel height (0 = unknown -> 16)
 
     /**
      * Entry point.
@@ -117,6 +119,14 @@ public class ImageStressTest {
                 } catch (NumberFormatException ignored) {
                     // keep the queried value
                 }
+            }
+
+            // Query the real cell pixel size so Sixel is scaled to the display resolution
+            // instead of a fixed 8x16 (which the terminal would upscale and blur on high-DPI).
+            int[] cell = TerminalImageCapabilities.queryCellPixelSize(backend);
+            if (cell != null) {
+                cellW = cell[0];
+                cellH = cell[1];
             }
 
             if (protocol instanceof SixelProtocol) {
@@ -214,7 +224,10 @@ public class ImageStressTest {
                 Span.raw("  Scaling: ").dim(),
                 Span.raw(scaling.name()).magenta().bold(),
                 Span.raw("  Sixel regs: ").dim(),
-                Span.raw(sixelRegisters > 0 ? String.valueOf(sixelRegisters) : "? (256)").cyan()
+                Span.raw(sixelRegisters > 0 ? String.valueOf(sixelRegisters) : "? (256)").cyan(),
+                Span.raw("  Cell px: ").dim(),
+                Span.raw((cellW > 0 ? cellW : 8) + "x" + (cellH > 0 ? cellH : 16)
+                    + (cellW > 0 ? "" : " (default)")).cyan()
             ),
             Line.from(
                 Span.raw("  Frames: ").dim(),
@@ -312,7 +325,7 @@ public class ImageStressTest {
     // ---- helpers ----
 
     private SixelProtocol makeSixel() {
-        return new SixelProtocol(sixelRegisters > 0 ? Math.min(256, sixelRegisters) : 256);
+        return new SixelProtocol(sixelRegisters > 0 ? Math.min(256, sixelRegisters) : 256, cellW, cellH);
     }
 
     private static ImageData generateGradientImage(int w, int h) {

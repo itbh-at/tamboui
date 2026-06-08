@@ -45,23 +45,46 @@ public final class SixelProtocol implements ImageProtocol {
     // Sixel character offset - character '?' (63) represents all-zero, '~' (126) represents all-ones
     private static final int SIXEL_OFFSET = 63;
 
+    /** Fallback cell pixel size when the terminal's real size is unknown. */
+    private static final int DEFAULT_CELL_WIDTH = 8;
+    private static final int DEFAULT_CELL_HEIGHT = 16;
+
     private final int maxColors;
+    private final int cellWidth;
+    private final int cellHeight;
     private final NativeImageCache cache = new NativeImageCache();
 
     /**
-     * Creates a Sixel protocol with default settings (256 colors).
+     * Creates a Sixel protocol with default settings (256 colors, 8x16 cell pixels).
      */
     public SixelProtocol() {
         this(MAX_COLORS);
     }
 
     /**
-     * Creates a Sixel protocol with a custom color limit.
+     * Creates a Sixel protocol with a custom color limit and the default cell pixel size.
      *
      * @param maxColors maximum number of colors in the palette (1-256)
      */
     public SixelProtocol(int maxColors) {
+        this(maxColors, DEFAULT_CELL_WIDTH, DEFAULT_CELL_HEIGHT);
+    }
+
+    /**
+     * Creates a Sixel protocol with a custom color limit and cell pixel size.
+     * <p>
+     * The cell pixel size determines the resolution the image is scaled to: too small and the
+     * terminal upscales a low-resolution Sixel (soft/blocky, especially on high-DPI displays).
+     * Pass the terminal's real cell size (e.g. queried via {@code CSI 16 t}) for a crisp result.
+     *
+     * @param maxColors  maximum number of colors in the palette (1-256)
+     * @param cellWidth  horizontal pixels per character cell (&gt; 0; else the default is used)
+     * @param cellHeight vertical pixels per character cell (&gt; 0; else the default is used)
+     */
+    public SixelProtocol(int maxColors, int cellWidth, int cellHeight) {
         this.maxColors = Math.max(1, Math.min(MAX_COLORS, maxColors));
+        this.cellWidth = cellWidth > 0 ? cellWidth : DEFAULT_CELL_WIDTH;
+        this.cellHeight = cellHeight > 0 ? cellHeight : DEFAULT_CELL_HEIGHT;
     }
 
     @Override
@@ -130,8 +153,9 @@ public final class SixelProtocol implements ImageProtocol {
 
     @Override
     public Resolution resolution() {
-        // Sixel can render at pixel level, but we report typical cell pixel ratio
-        return new Resolution(8, 16);
+        // The image is pre-scaled to (cells x cellWidth) by (cells x cellHeight) pixels, so this
+        // should reflect the terminal's real cell pixel size for a crisp result.
+        return new Resolution(cellWidth, cellHeight);
     }
 
     @Override

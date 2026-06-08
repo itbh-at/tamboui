@@ -45,6 +45,21 @@ class TerminalImageCapabilitiesTest {
     }
 
     @Test
+    void parseCellPixelSize_reads_the_cell_size_reply() {
+        // CSI 6 ; height ; width t  -> [width, height]
+        assertThat(TerminalImageCapabilities.parseCellPixelSize("\033[6;32;15t")).containsExactly(15, 32);
+        assertThat(TerminalImageCapabilities.parseCellPixelSize("\033[6;40;20t")).containsExactly(20, 40);
+    }
+
+    @Test
+    void parseCellPixelSize_returns_null_on_missing_or_malformed_reply() {
+        assertThat(TerminalImageCapabilities.parseCellPixelSize(null)).isNull();
+        assertThat(TerminalImageCapabilities.parseCellPixelSize("")).isNull();
+        assertThat(TerminalImageCapabilities.parseCellPixelSize("garbage")).isNull();
+        assertThat(TerminalImageCapabilities.parseCellPixelSize("\033[6;32t")).isNull();
+    }
+
+    @Test
     void withSupport_creates_capabilities_with_specified_support() {
         TerminalImageCapabilities caps = TerminalImageCapabilities.withSupport(
             EnumSet.of(TerminalImageProtocol.KITTY, TerminalImageProtocol.HALF_BLOCK)

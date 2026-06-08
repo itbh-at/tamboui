@@ -130,3 +130,18 @@ always present, so auto-detect picks Kitty for Ghostty even without the terminfo
   means clear-slot → re-encode → re-send → terminal re-decode. That flickers under rapid change.
   This is inherent to Sixel; ordinary use (occasional changes, e.g. flipping a page) is unaffected.
   Terminal-side Sixel handling also varies between emulators.
+- Sixel is scaled to the terminal's cell pixel size, queried via `CSI 16 t` (or derived from the
+  window pixel size `CSI 14 t` and the text-area size `CSI 18 t`). Terminals that report logical
+  (point) sizes while drawing Sixel at device pixels — iTerm2 on a Retina display, for instance —
+  render the image at a fraction of its size, because there is no standard query for the backing
+  scale factor. Sixel-only terminals that report device pixels are unaffected, and iTerm2 itself
+  auto-selects its own inline-image protocol rather than Sixel.
+
+## Sixel colour and resolution
+
+Sixel is an indexed-colour format, so quality depends on the palette and the resolution it is sent
+at. The encoder builds an adaptive palette with **median cut** over the image's actual colours
+(rather than a fixed RGB cube), capped to the terminal's colour-register count
+(`min(256, XTSMGRAPHICS registers)`, default 256) so it never emits more registers than the terminal
+supports. The image is pre-scaled to the cell pixel size above. Even so, Sixel remains palette-based
+and lower-fidelity than Kitty/iTerm2, which transmit true-colour RGB.
